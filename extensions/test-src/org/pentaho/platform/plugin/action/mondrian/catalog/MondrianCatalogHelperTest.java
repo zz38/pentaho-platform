@@ -17,16 +17,10 @@
 
 package org.pentaho.platform.plugin.action.mondrian.catalog;
 
-import mondrian.olap.CacheControl;
-import mondrian.olap.Connection;
-import mondrian.olap.Schema;
 import mondrian.olap.Util.PropertyList;
 import mondrian.spi.DynamicSchemaProcessor;
 import org.apache.commons.io.IOUtils;
 import org.junit.*;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.olap4j.OlapConnection;
 import org.pentaho.database.model.DatabaseConnection;
 import org.pentaho.database.model.IDatabaseConnection;
 import org.pentaho.database.service.DatabaseDialectService;
@@ -44,7 +38,6 @@ import org.pentaho.platform.api.util.IPasswordService;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
 import org.pentaho.platform.engine.core.system.StandaloneSession;
 import org.pentaho.platform.engine.core.system.SystemSettings;
-import org.pentaho.platform.plugin.action.olap.IOlapService;
 import org.pentaho.platform.plugin.services.cache.CacheManager;
 import org.pentaho.platform.plugin.services.importexport.legacy.MondrianCatalogRepositoryHelper;
 import org.pentaho.platform.repository2.ClientRepositoryPaths;
@@ -54,7 +47,9 @@ import org.pentaho.platform.util.messages.LocaleHelper;
 import org.pentaho.test.platform.engine.core.MicroPlatform;
 import org.pentaho.test.platform.plugin.UserRoleMapperTest.TestUserRoleListService;
 
-import java.io.*;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -80,33 +75,12 @@ public class MondrianCatalogHelperTest {
 
   private static MicroPlatform booter;
   private ICacheManager cacheMgr;
-
+  private static IUnifiedRepository repo;
   private MondrianCatalogHelper helper;
 
-  @Mock private IUnifiedRepository repo;
-
-  @Mock private  IOlapService olapService;
-
-  @Mock private CacheControl mondrianCacheControl;
-
-  @Mock private Schema mondrianSchema;
-
-  @Mock private OlapConnection olapConn;
-
-  @Mock private Connection rolapConn;
-
-
-  @Before
-  public void setUp() throws Exception {
-    MockitoAnnotations.initMocks( this );
-
-    when( olapService.getConnection( any( String.class ), any( IPentahoSession.class ) ) )
-      .thenReturn( olapConn );
-    when( rolapConn.getSchema() ).thenReturn( mondrianSchema );
-    when( rolapConn.getCacheControl( any( PrintWriter.class ) ) )
-      .thenReturn( mondrianCacheControl );
-    when( olapConn.unwrap( Connection.class ) )
-      .thenReturn( rolapConn );
+  @BeforeClass
+  public static void setUpClass() throws Exception {
+    repo = mock( IUnifiedRepository.class );
 
     booter = new MicroPlatform( "test-src/solution" );
     booter.define( IPasswordService.class, Base64PasswordService.class, Scope.GLOBAL );
@@ -116,30 +90,34 @@ public class MondrianCatalogHelperTest {
     booter.define( ICacheManager.class, CacheManager.class, Scope.GLOBAL );
     booter.define( IUserRoleListService.class, TestUserRoleListService.class, Scope.GLOBAL );
     booter.defineInstance( IUnifiedRepository.class, repo );
-    booter.defineInstance( IOlapService.class, olapService );
     booter.setSettingsProvider( new SystemSettings() );
     booter.start();
-
-    cacheMgr = PentahoSystem.getCacheManager( null );
-    helper = (MondrianCatalogHelper) PentahoSystem.get( IAclAwareMondrianCatalogService.class );
   }
 
   @AfterClass
   public static void tearDownClass() throws Exception {
   }
 
+  @Before
+  public void setUp() throws Exception {
+    // Clear up the cache
+    cacheMgr = PentahoSystem.getCacheManager( null );
+    cacheMgr.clearRegionCache( MondrianCatalogHelper.MONDRIAN_CATALOG_CACHE_REGION );
+
+    helper = (MondrianCatalogHelper) PentahoSystem.get( IAclAwareMondrianCatalogService.class );
+  }
+
   @After
   public void tearDown() throws Exception {
     reset( repo );
-    cacheMgr.clearRegionCache( MondrianCatalogHelper.MONDRIAN_CATALOG_CACHE_REGION );
-    booter.stop();
   }
+
 
   private void initMondrianCatalogsCache() {
     initMondrianCatalogsCache( new HashMap<String, MondrianCatalog>(  ) );
   }
 
-  private void initMondrianCatalogsCache( Map<String, MondrianCatalog> map ) {
+  private void initMondrianCatalogsCache(Map<String, MondrianCatalog> map) {
     cacheMgr.addCacheRegion( MondrianCatalogHelper.MONDRIAN_CATALOG_CACHE_REGION );
     cacheMgr.putInRegionCache( MondrianCatalogHelper.MONDRIAN_CATALOG_CACHE_REGION, LocaleHelper.getLocale().toString(), map );
   }
@@ -152,7 +130,7 @@ public class MondrianCatalogHelperTest {
   }
 
 
-  @Test( expected = MondrianCatalogServiceException.class )
+  @Test(expected = MondrianCatalogServiceException.class)
   public void addCatalog_WhenAlreadyExists() throws Exception {
     MondrianCatalog cat = createTestCatalog();
     initMondrianCatalogsCache( Collections.singletonMap( CATALOG_NAME, cat ) );
@@ -162,7 +140,7 @@ public class MondrianCatalogHelperTest {
     IPentahoSession session = mock( IPentahoSession.class );
     doNothing().when( helper ).init( session );
 
-    helper.addCatalog( new ByteArrayInputStream( new byte[ 0 ] ), cat, false, null, session );
+    helper.addCatalog( new ByteArrayInputStream( new byte[0] ), cat, false, null, session );
   }
 
 
@@ -205,11 +183,6 @@ public class MondrianCatalogHelperTest {
     verify( repo ).createFile( eq( makeIdObject( steelWheelsFolderPath ) ),
         argThat( isLikeFile( makeFileObject( steelWheelsFolderPath + RepositoryFile.SEPARATOR + "schema.xml" ) ) ),
         any( IRepositoryFileData.class ), anyString() );
-
-
-    // cache should be cleared for this schema only
-    verify( olapService, times( 1 ) ).getConnection( CATALOG_NAME, session );
-    verify( mondrianCacheControl, times( 1 ) ).flushSchema( this.mondrianSchema );
   }
 
   @Test
@@ -221,7 +194,7 @@ public class MondrianCatalogHelperTest {
     IPentahoSession session = mock( IPentahoSession.class );
     doNothing().when( helperSpy ).init( session );
 
-    doReturn( Collections.<MondrianCatalog>emptyList() ).when( helperSpy ).getCatalogs( session );
+    doReturn( Collections.<MondrianCatalog>emptyList()).when( helperSpy ).getCatalogs( session );
     doReturn( null ).when( helperSpy ).makeSchema( anyString() );
 
     MondrianCatalog cat = createTestCatalog();
@@ -276,10 +249,6 @@ public class MondrianCatalogHelperTest {
     verify( repo ).createFile( eq( makeIdObject( sampleDataFolderPath ) ),
         argThat( isLikeFile( makeFileObject( sampleDataFolderPath + RepositoryFile.SEPARATOR + "schema.xml" ) ) ),
         any( IRepositoryFileData.class ), anyString() );
-
-    // cache should be cleared for this schema only
-    verify( olapService, times( 1 ) ).getConnection( "SampleData",  null );
-    verify( mondrianCacheControl, times( 1 ) ).flushSchema( mondrianSchema );
   }
 
   @Test
@@ -332,8 +301,6 @@ public class MondrianCatalogHelperTest {
 
     List<MondrianCatalog> cats = helper.listCatalogs( session, true );
     assertEquals( 1, cats.size() );
-
-    verify( mondrianCacheControl, never() ).flushSchema( mondrianSchema );
   }
 
   @Test
@@ -396,7 +363,7 @@ public class MondrianCatalogHelperTest {
     verify( aclHelper ).removeAclFor( any( RepositoryFile.class ) );
   }
 
-  @Test( expected = MondrianCatalogServiceException.class )
+  @Test(expected = MondrianCatalogServiceException.class)
   public void removeCatalog_WhenProhibited() throws Exception {
     IPentahoSession session = mock( IPentahoSession.class );
 
@@ -460,7 +427,7 @@ public class MondrianCatalogHelperTest {
     doReturn( true ).when( helperSpy ).hasAccess( eq( cat ), any( RepositoryFilePermission.class ) );
     doNothing().when( helperSpy ).init( session );
     doReturn( cat ).when( helperSpy ).getCatalogFromCache( anyString(), eq( session ) );
-
+        
     assertEquals( helperSpy.getCatalog( catalogName, session ).getName(), catalogName );
     verify( helperSpy ).hasAccess( eq( cat ), any( RepositoryFilePermission.class ) );
 
